@@ -1,0 +1,237 @@
+@startuml BETter_Domain_ClassDiagram
+title BETter - Diagram Klas Modułu BETter.Domain (Etap 3)
+
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam linetype ortho
+
+package "BETter.Domain.Enums" {
+    enum SlipType {
+        Solo = 1
+        Ako = 2
+    }
+
+    enum SlipStatus {
+        Open = 1
+        Won = 2
+        Lost = 3
+        Void = 4
+        CashedOut = 5
+    }
+
+    enum EventStatus {
+        Prematch = 1
+        Live = 2
+        Final = 3
+        Postponed = 4
+        Canceled = 5
+    }
+
+    enum SelectionStatus {
+        Pending = 1
+        Won = 2
+        Lost = 3
+        Void = 4
+    }
+}
+
+package "BETter.Domain.Entities" {
+    class SportEvent <<AggregateRoot>> {
+        + Id : Guid
+        + ExternalId : string
+        + Sport : string
+        + League : string
+        + HomeTeam : string
+        + AwayTeam : string
+        + StartTime : DateTimeOffset
+        + Status : EventStatus
+        + HomeScore : int?
+        + AwayScore : int?
+        + Markets : IReadOnlyCollection<Market>
+        --
+        + AddMarket(market : Market) : void
+        + UpdateScore(homeScore : int, awayScore : int) : void
+        + ChangeStatus(newStatus : EventStatus) : void
+        + SuspendAllMarkets() : void
+        + ResumeAllMarkets() : void
+    }
+
+    class Market <<Entity>> {
+        + Id : Guid
+        + SportEventId : Guid
+        + Name : string
+        + IsSuspended : bool
+        + Selections : IReadOnlyCollection<Selection>
+        --
+        + AddSelection(selection : Selection) : void
+        + Suspend() : void
+        + Resume() : void
+    }
+
+    class Selection <<Entity>> {
+        + {static} MinOdds : decimal = 1.00m
+        + Id : Guid
+        + MarketId : Guid
+        + SportEventId : Guid
+        + Name : string
+        + Odds : decimal
+        + Status : SelectionStatus
+        --
+        + UpdateOdds(newOdds : decimal) : void
+        + Settle(status : SelectionStatus) : void
+    }
+
+    class BetSlip <<AggregateRoot>> {
+        + {static} MinSelections : int = 1
+        + {static} MaxSelections : int = 30
+        + Id : Guid
+        + UserId : Guid
+        + Type : SlipType
+        + Status : SlipStatus
+        + GrossStake : decimal
+        + NetStake : decimal
+        + TaxMultiplier : decimal
+        + TotalOdds : decimal
+        + PotentialPayout : decimal
+        + SettledPayout : decimal?
+        + CreatedAt : DateTimeOffset
+        + SettledAt : DateTimeOffset?
+        + Items : IReadOnlyCollection<BetSlipItem>
+        --
+        + AddItem(item : BetSlipItem) : void
+        + RemoveItem(selectionId : Guid) : void
+        + ApplyCalculation(calculation : CouponCalculationResult) : void
+        + MarkAsWon(finalTotalOdds : decimal, finalPayout : decimal, settledAt : DateTimeOffset) : void
+        + MarkAsLost(settledAt : DateTimeOffset) : void
+        + MarkAsVoid(settledAt : DateTimeOffset) : void
+        + MarkAsCashedOut(cashOutAmount : decimal, settledAt : DateTimeOffset) : void
+    }
+
+    class BetSlipItem <<Entity>> {
+        + {static} VoidOdds : decimal = 1.00m
+        + Id : Guid
+        + BetSlipId : Guid
+        + SportEventId : Guid
+        + MarketId : Guid
+        + SelectionId : Guid
+        + EventName : string
+        + MarketName : string
+        + SelectionName : string
+        + LockedOdds : decimal
+        + Status : SelectionStatus
+        + EffectiveOdds : decimal
+        --
+        + Settle(status : SelectionStatus) : void
+    }
+}
+
+package "BETter.Domain.Services" {
+    interface ICouponCalculator <<DomainService>> {
+        + CalculateNetStake(grossStake : decimal, isTaxFreePromo : bool) : decimal
+        + CalculateTotalOdds(items : IEnumerable<BetSlipItem>) : decimal
+        + CalculatePotentialPayout(netStake : decimal, totalOdds : decimal) : decimal
+        + Calculate(betSlip : BetSlip, grossStake : decimal, isTaxFreePromo : bool) : CouponCalculationResult
+    }
+
+    class CouponCalculator {
+        + {static} StandardTaxMultiplier : decimal = 0.88m
+        + {static} PromoTaxFreeMultiplier : decimal = 1.00m
+        + {static} DefaultMinStake : decimal = 2.00m
+        + {static} DefaultMaxPayout : decimal = 500000.00m
+        + MinStake : decimal
+        + MaxPayout : decimal
+        --
+        + CalculateNetStake(grossStake : decimal, isTaxFreePromo : bool) : decimal
+        + CalculateTotalOdds(items : IEnumerable<BetSlipItem>) : decimal
+        + CalculatePotentialPayout(netStake : decimal, totalOdds : decimal) : decimal
+        + Calculate(betSlip : BetSlip, grossStake : decimal, isTaxFreePromo : bool) : CouponCalculationResult
+    }
+
+    class CouponCalculationResult <<record>> {
+        + GrossStake : decimal
+        + NetStake : decimal
+        + TaxMultiplier : decimal
+        + TotalOdds : decimal
+        + PotentialPayout : decimal
+        + IsWithinLimits : bool
+        + ValidationError : string?
+    }
+
+    interface IAntiCorrelationValidator <<DomainService>> {
+        + Validate(betSlip : BetSlip) : ValidationResult
+        + Validate(items : IEnumerable<BetSlipItem>) : ValidationResult
+        + CanAddSelection(betSlip : BetSlip, sportEventId : Guid) : bool
+    }
+
+    class AntiCorrelationValidator {
+        + Validate(betSlip : BetSlip) : ValidationResult
+        + Validate(items : IEnumerable<BetSlipItem>) : ValidationResult
+        + CanAddSelection(betSlip : BetSlip, sportEventId : Guid) : bool
+    }
+
+    class ValidationResult <<record>> {
+        + IsValid : bool
+        + ErrorMessage : string?
+        + ConflictingSportEventIds : IReadOnlyCollection<Guid>?
+        --
+        + {static} Success() : ValidationResult
+        + {static} Failure(errorMessage : string, conflictingSportEventIds : IReadOnlyCollection<Guid>?) : ValidationResult
+    }
+}
+
+package "BETter.Domain.Ports" {
+    interface IBetSlipRepository <<OutboundPort>> {
+        + GetByIdAsync(id : Guid, ct : CancellationToken) : Task<BetSlip?>
+        + GetByUserIdAsync(userId : Guid, ct : CancellationToken) : Task<IReadOnlyList<BetSlip>>
+        + GetOpenSlipsBySportEventIdAsync(sportEventId : Guid, ct : CancellationToken) : Task<IReadOnlyList<BetSlip>>
+        + AddAsync(betSlip : BetSlip, ct : CancellationToken) : Task
+        + UpdateAsync(betSlip : BetSlip, ct : CancellationToken) : Task
+    }
+
+    interface ISportEventRepository <<OutboundPort>> {
+        + GetByIdAsync(id : Guid, ct : CancellationToken) : Task<SportEvent?>
+        + GetByExternalIdAsync(externalId : string, ct : CancellationToken) : Task<SportEvent?>
+        + GetActiveEventsAsync(ct : CancellationToken) : Task<IReadOnlyList<SportEvent>>
+        + GetByStatusAsync(status : EventStatus, ct : CancellationToken) : Task<IReadOnlyList<SportEvent>>
+        + GetSelectionByIdAsync(selectionId : Guid, ct : CancellationToken) : Task<Selection?>
+        + SaveAsync(sportEvent : SportEvent, ct : CancellationToken) : Task
+    }
+
+    interface IWalletPort <<OutboundPort>> {
+        + HoldStakeAsync(userId : Guid, betSlipId : Guid, amount : decimal, ct : CancellationToken) : Task<bool>
+        + SettleWinAsync(userId : Guid, betSlipId : Guid, stakeAmount : decimal, payoutAmount : decimal, ct : CancellationToken) : Task
+        + SettleLossAsync(userId : Guid, betSlipId : Guid, stakeAmount : decimal, ct : CancellationToken) : Task
+        + RefundVoidAsync(userId : Guid, betSlipId : Guid, stakeAmount : decimal, ct : CancellationToken) : Task
+        + CashOutAsync(userId : Guid, betSlipId : Guid, stakeAmount : decimal, cashOutAmount : decimal, ct : CancellationToken) : Task
+    }
+}
+
+' Kompozycje i powiązania encji (z krotnościami)
+SportEvent "1" *-- "1..*" Market : contains
+Market "1" *-- "1..*" Selection : contains
+BetSlip "1" *-- "1..30" BetSlipItem : contains
+
+BetSlipItem "*" --> "1" Selection : references
+BetSlipItem "*" --> "1" SportEvent : references
+
+' Powiązania z enumami
+SportEvent --> EventStatus
+Selection --> SelectionStatus
+BetSlip --> SlipType
+BetSlip --> SlipStatus
+BetSlipItem --> SelectionStatus
+
+' Relacje realizacji interfejsów
+CouponCalculator ..|> ICouponCalculator
+AntiCorrelationValidator ..|> IAntiCorrelationValidator
+
+' Zależności serwisów i portów
+CouponCalculator ..> BetSlip : calculates
+CouponCalculator ..> CouponCalculationResult : returns
+AntiCorrelationValidator ..> BetSlip : validates
+AntiCorrelationValidator ..> ValidationResult : returns
+
+IBetSlipRepository ..> BetSlip : persists
+ISportEventRepository ..> SportEvent : persists
+ISportEventRepository ..> Selection : queries
+@enduml
