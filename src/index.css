@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-abyss: #040014;
+  --color-card: #0D0626;
+  --color-surface: #07021A;
+  --color-royal: #450369;
+  --color-royal-hover: #580685;
+  --color-royal-border: #A855F7;
+  --color-indigo-slate: #1A0F36;
+  --color-dusk-plum: #311E59;
+  --color-mist: #B4BCC8;
+}
+
+body {
+  background-color: #040014;
+  color: #ffffff;
+}
