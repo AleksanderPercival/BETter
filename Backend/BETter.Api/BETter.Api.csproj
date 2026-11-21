@@ -1,9 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\BETter.Domain\BETter.Domain.csproj" />
+    <ProjectReference Include="..\BETter.Wallet\BETter.Wallet.csproj" />
+    <ProjectReference Include="..\BETter.Infrastructure\BETter.Infrastructure.csproj" />
+  </ItemGroup>
 
 </Project>
