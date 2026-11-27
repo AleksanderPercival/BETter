@@ -1,0 +1,114 @@
+@startuml BETter_Architecture_ComponentDiagram
+title BETter - Szkic Architektury / Diagram Komponentów (Modularny Monolit: Ports & Adapters - Etap 3)
+
+skinparam componentStyle uml2
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+
+skinparam rectangle {
+    BorderColor #334155
+}
+
+actor "AK-01 / AK-02\nGość / Gracz (18+)" as Player
+
+rectangle "Warstwa Prezentacji - Outside (UI)" #F8FAFC {
+    component "Frontend SPA\n(React + TypeScript + Vite)\n[Układ 3-kolumnowy: Ligi | Oferta | BetSlip]" as FrontendSPA <<UI Adapter>>
+}
+
+rectangle "System BETter - Backend (.NET 10 Modularny Monolit)" {
+
+    package "Warstwa Zewnętrzna (Outside - Driving / Primary Adapters)\nProjekt: BETter.Api" #EFF6FF {
+        component "Minimal API Endpoints\nGET /api/events\nPOST /api/wallet/deposit\nPOST /api/slips/calculate\nPOST /api/slips/place" as MinimalApi <<Driving Adapter>>
+        component "SignalR Live Hub\n(WebSockets Push - kursy Live & blokady)" as SignalRHub <<Driving Adapter>>
+        component "Composition Root & ACID Coordinator\n(Program.cs / DI)" as CompositionRoot <<Bootstrap>>
+    }
+
+    package "Warstwa Wewnętrzna (Inside - Czysta Logika Domenowa i Finansowa, zero zależności od DB/HTTP)" #F0FDF4 {
+
+        package "Projekt: BETter.Domain (Betting Core)" #DCFCE7 {
+            interface "ICouponCalculator" as ICouponCalc <<Inbound Port>>
+            interface "IAntiCorrelationValidator" as IAntiCorr <<Inbound Port>>
+
+            component "CouponCalculator\n(Podatek 12% = 0.88m, SOLO/AKO, decimal)" as CouponCalc <<Domain Service>>
+            component "AntiCorrelationValidator\n(Blokada duplikatu SportEventId na AKO)" as AntiCorr <<Domain Service>>
+            component "Agregaty Domenowe\nSportEvent -> Market -> Selection\nBetSlip -> BetSlipItem" as DomainAggregates <<Domain Model>>
+
+            interface "ISportEventRepository" as ISportEventRepo <<Outbound Port>>
+            interface "IBetSlipRepository" as IBetSlipRepo <<Outbound Port>>
+            interface "IWalletPort" as IWalletPort <<Outbound Port>>
+        }
+
+        package "Projekt: BETter.Wallet (Wallet Core)" #FEF9C3 {
+            component "WalletService\n(HoldStake, SettleWin, SettleLoss,\nRefundVoid, CashOut, Deposit, Withdraw)" as WalletService <<Domain Service>>
+            component "Encje Portfela\nUser, Wallet (Available/Frozen/Bonus),\nLedgerEntry, BettingLimits" as WalletEntities <<Domain Model>>
+
+            interface "IWalletRepository" as IWalletRepo <<Outbound Port>>
+        }
+    }
+
+    package "Warstwa Zewnętrzna (Outside - Driven / Secondary Adapters)\nProjekt: BETter.Infrastructure" #FAF5FF {
+        component "SportEventRepository" as SportEventRepo <<Driven Adapter>>
+        component "BetSlipRepository" as BetSlipRepo <<Driven Adapter>>
+        component "WalletRepository &\nWalletPortAdapter" as WalletRepoAdapter <<Driven Adapter>>
+        component "BetterDbContext\n(EF Core + Npgsql)\nTransakcje ACID & Concurrency (Version)" as DbContext <<ORM Persistence>>
+        component "EspnOfferSynchronizer &\nEspnApiClient (HttpClient)" as EspnAdapter <<Driven Adapter>>
+    }
+}
+
+database "PostgreSQL 17\n(Docker: better-postgres:5432)\nsport_events, markets, selections,\nbet_slips, bet_slip_items,\nusers, wallets, ledger_entries, betting_limits" as PostgresDb <<Database>>
+
+cloud "AK-03: ESPN Site API v2\nhttps://site.api.espn.com/\n.../sports/soccer/{league}/scoreboard\n(ita.1, eng.1, esp.1, ger.1, uefa.champions)" as EspnApi <<External System>>
+
+cloud "AK-04: Zewnętrzny System Płatności\n(Symulator Bramki Depozytów/Wypłat)" as PaymentGateway <<External System>>
+
+' Interakcje Użytkownik <-> UI <-> API
+Player --> FrontendSPA : Przeglądanie oferty,\nkonstrukcja kuponu, depozyt
+FrontendSPA --> MinimalApi : REST JSON (HTTP :5000)\n/api/events, /api/wallet/deposit,\n/api/slips/calculate, /api/slips/place
+SignalRHub ..> FrontendSPA : WebSockets Push\n(zmiany kursów Live, Suspended Market)
+
+' Driving Adapters -> Inside Core
+MinimalApi --> ICouponCalc : wylicza kupon (PU-07)
+MinimalApi --> IAntiCorr : waliduje korelację AKO (PU-08)
+MinimalApi --> ISportEventRepo : pobiera ofertę i weryfikuje kursy
+MinimalApi --> IBetSlipRepo : zapisuje kupon OPEN (PU-09)
+MinimalApi --> IWalletPort : blokuje stawkę Hold (PU-05 / PU-09)
+MinimalApi --> WalletRepoAdapter : operacja Deposit (PU-03)
+CompositionRoot ..> DbContext : koordynuje transakcję ACID
+
+' Realizacje wewnątrz BETter.Domain
+CouponCalc .up.|> ICouponCalc
+AntiCorr .up.|> IAntiCorr
+CouponCalc --> DomainAggregates
+AntiCorr --> DomainAggregates
+
+' Powiązania BETter.Wallet <-> BETter.Domain (Odwrócenie zależności)
+WalletService .up.|> IWalletPort
+WalletService --> WalletEntities
+WalletService --> IWalletRepo
+
+' Driven Adapters (BETter.Infrastructure) realizują Porty Wyjściowe (Odwrócenie zależności - DIP)
+SportEventRepo .up.|> ISportEventRepo
+BetSlipRepo .up.|> IBetSlipRepo
+WalletRepoAdapter .up.|> IWalletRepo
+WalletRepoAdapter .up.|> IWalletPort : adapter przejściowy\n(Walking Skeleton)
+
+' Wewnętrzne powiązania w BETter.Infrastructure
+SportEventRepo --> DbContext
+BetSlipRepo --> DbContext
+WalletRepoAdapter --> DbContext
+EspnAdapter --> ISportEventRepo : synchronizuje mecze i kursy 1X2
+
+' Komunikacja ze światem zewnętrznym
+DbContext --> PostgresDb : TCP/IP :5432 (Npgsql)\nnumeric(18,2) / numeric(18,4)
+EspnAdapter --> EspnApi : HTTPS GET JSON\n(Scoreboard API)
+WalletRepoAdapter ..> PaymentGateway : autoryzacja wpłat/wypłat
+
+note bottom of DomainAggregates
+  **Zasada Architektury Heksagonalnej (WNF-03):**
+  Warstwa *Inside* (BETter.Domain, BETter.Wallet) nie posiada
+  żadnych referencji do EF Core, Npgsql, ASP.NET Core ani HttpClient.
+  Wszystkie zależności skierowane są do wewnątrz (DIP).
+end note
+
+@enduml

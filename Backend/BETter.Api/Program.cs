@@ -1,13 +1,18 @@
+using BETter.Api.Endpoints;
 using BETter.Domain.Services;
+using BETter.Infrastructure;
+using BETter.Infrastructure.External.Espn;
+using BETter.Infrastructure.Persistence;
+using BETter.Infrastructure.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Inside (Domain & Wallet) services
+// Inside (Domain) services
 builder.Services.AddSingleton<ICouponCalculator>(_ => new CouponCalculator());
 builder.Services.AddSingleton<IAntiCorrelationValidator, AntiCorrelationValidator>();
 
-// TODO (BETter.Wallet): register WalletService implementing IWalletPort
-// TODO (BETter.Infrastructure): register BetterDbContext (PostgreSQL) & repository adapters
+// Outside (Infrastructure): PostgreSQL (BetterDbContext), Repositories, IWalletPort adapter & ESPN HttpClient
+builder.Services.AddBetterInfrastructure(builder.Configuration);
 
 builder.Services.AddCors(options =>
 {
@@ -23,6 +28,28 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Inicjalizacja schematu bazy danych, konta demo i pierwszej synchronizacji oferty ESPN przy starcie
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var dbContext = scope.ServiceProvider.GetRequiredService<BetterDbContext>();
+        await dbContext.Database.EnsureCreatedAsync();
+
+        var walletRepository = scope.ServiceProvider.GetRequiredService<WalletRepository>();
+        await walletRepository.GetOrCreateByUserIdAsync(WalletRepository.DemoUserId);
+
+        var offerSynchronizer = scope.ServiceProvider.GetRequiredService<IOfferSynchronizer>();
+        await offerSynchronizer.EnsureOfferReadyAsync();
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(
+            ex,
+            "Database startup initialization skipped (verify PostgreSQL container via 'docker compose -f Backend/docker-compose.yml up -d').");
+    }
+}
+
 app.UseCors("FrontendDev");
 
 app.MapGet("/api/health", () => Results.Ok(new
@@ -32,10 +59,6 @@ app.MapGet("/api/health", () => Results.Ok(new
     timestampUtc = DateTimeOffset.UtcNow
 }));
 
-// TODO (Etap 3 - Walking Skeleton):
-// GET  /api/events
-// POST /api/wallet/deposit
-// POST /api/slips/calculate
-// POST /api/slips/place
+app.MapPrototypeEndpoints();
 
 app.Run();
